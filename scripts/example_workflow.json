@@ -1,0 +1,42 @@
+{
+  "name": "expense_approval",
+  "version": "1.0.0",
+  "description": "Expense report approval workflow with amount-based routing",
+  "nodes": [
+    {"id": "start", "type": "start", "label": "Begin"},
+    {"id": "submit_expense", "type": "task", "label": "Submit Expense Report"},
+    {"id": "manager_review", "type": "approval", "label": "Manager Review"},
+    {"id": "check_amount", "type": "decision", "label": "Check Expense Amount"},
+    {"id": "auto_approved", "type": "end", "label": "Auto-Approved (under $1000)"},
+    {"id": "vp_review", "type": "approval", "label": "VP Review (over $1000)"},
+    {"id": "check_vp_decision", "type": "decision", "label": "VP Approved?"},
+    {"id": "approved", "type": "end", "label": "Approved"},
+    {"id": "rejected", "type": "end", "label": "Rejected"}
+  ],
+  "transitions": [
+    {"from_node": "start", "to_node": "submit_expense"},
+    {"from_node": "submit_expense", "to_node": "manager_review"},
+    {"from_node": "manager_review", "to_node": "check_amount"},
+    {
+      "from_node": "check_amount",
+      "to_node": "auto_approved",
+      "condition": {"field": "amount", "operator": "lte", "value": 1000}
+    },
+    {
+      "from_node": "check_amount",
+      "to_node": "vp_review",
+      "condition": {"field": "amount", "operator": "gt", "value": 1000}
+    },
+    {"from_node": "vp_review", "to_node": "check_vp_decision"},
+    {
+      "from_node": "check_vp_decision",
+      "to_node": "approved",
+      "condition": {"field": "vp_approved", "operator": "eq", "value": true}
+    },
+    {
+      "from_node": "check_vp_decision",
+      "to_node": "rejected",
+      "condition": {"field": "vp_approved", "operator": "eq", "value": false}
+    }
+  ]
+}
