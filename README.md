@@ -113,9 +113,23 @@ Submit an event to advance the workflow. The `event_type` must match the current
 - `approval` nodes expect `EventType.APPROVAL_SUBMITTED`
 - `decision` nodes expect `EventType.DECISION_MADE`
 
+Payloads are copied, including nested values, so later changes to caller-owned data
+or the live context do not alter recorded events. If validation or a transition
+fails, the run, event log, and idempotency keys are unchanged; the same key can be
+used for a corrected submission.
+
 #### `engine.replay(definition, events, run_id=None) -> WorkflowRun`
 
 Deterministically replay a workflow from its event log. Given the same definition and events, always produces the same final state.
+
+Replay validates event types, target nodes, and duplicate idempotency keys using
+the same rules as live submissions. It rejects events after completion and creates
+independent copies of the input log and context. A valid partial log can be replayed
+and continued with `submit_event()`.
+
+Event payload dictionaries remain accessible to callers; treat recorded logs and
+workflow definitions as read-only when relying on deterministic replay. Logs
+already altered by earlier versions cannot be reconstructed automatically.
 
 ### Node Types
 
