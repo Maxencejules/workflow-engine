@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Plain JSON save/reload example with a workflow definition snapshot and fresh-process regression.
+
+### Fixed
+
+- Preserve independent historical context and payload snapshots, including nested values.
+- Validate replayed event types, node IDs, duplicate keys, and events after completion.
+- Leave run state, history, and idempotency keys unchanged after rejected transitions.
+- Run CI on the default `master` branch and install JSON Schema type stubs for mypy.
+- Document installation from this repository instead of assuming a PyPI release.
+
 ## [0.1.0] - 2026-02-14
 
 ### Added

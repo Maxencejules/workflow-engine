@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import uuid
+from copy import deepcopy
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -56,7 +58,7 @@ class WorkflowEngine:
         Returns:
             A WorkflowRun positioned at the first actionable node.
         """
-        ctx = dict(context) if context else {}
+        ctx = deepcopy(context) if context else {}
         rid = run_id or uuid.uuid4().hex
 
         run = WorkflowRun(
@@ -69,7 +71,7 @@ class WorkflowEngine:
         start_event = Event(
             event_type=EventType.WORKFLOW_STARTED,
             timestamp=datetime.now(timezone.utc),
-            payload={"context": ctx},
+            payload={"context": deepcopy(ctx)},
             node_id=definition.start_node.id,
         )
         run.record_event(start_event)
@@ -100,40 +102,19 @@ class WorkflowEngine:
             WorkflowCompletedError: If the workflow has already finished.
             DuplicateEventError: If the idempotency key was already used.
             InvalidEventError: If the event type doesn't match the current node.
+            TransitionError: If no transition can be taken.
+            ConditionEvaluationError: If a transition condition cannot be evaluated.
+
+        Rejected events leave the run, event log, and idempotency keys unchanged.
         """
-        if run.status != RunStatus.RUNNING:
-            raise WorkflowCompletedError(
-                f"Cannot submit events to a {run.status.value} workflow run."
-            )
-
-        if idempotency_key and run.has_seen_key(idempotency_key):
-            raise DuplicateEventError(
-                f"Event with idempotency key '{idempotency_key}' has already been processed."
-            )
-
-        current_node = run.definition.nodes[run.current_node_id]
-        expected = NODE_EVENT_MAP.get(current_node.type)
-        if expected is None or event_type != expected:
-            raise InvalidEventError(
-                f"Node '{current_node.id}' (type={current_node.type.value}) "
-                f"expects event '{expected.value if expected else 'N/A'}', "
-                f"got '{event_type.value}'."
-            )
-
         event = Event(
             event_type=event_type,
             timestamp=datetime.now(timezone.utc),
-            payload=dict(payload) if payload else {},
+            payload=payload if payload is not None else {},
             idempotency_key=idempotency_key or uuid.uuid4().hex,
-            node_id=current_node.id,
+            node_id=run.current_node_id,
         )
-        run.record_event(event)
-
-        # Merge payload into context so transition conditions can reference it.
-        if event.payload:
-            run.context.update(event.payload)
-
-        self._advance(run)
+        self._apply_event(run, event)
         return run
 
     def replay(
@@ -150,19 +131,36 @@ class WorkflowEngine:
         Args:
             definition: The workflow definition.
             events: The ordered event log to replay.
-            run_id: Optional run ID (defaults to the first event's idempotency key).
+            run_id: Optional run ID (generated if not provided).
 
         Returns:
             A WorkflowRun in the replayed state.
+
+        Events are validated using the same rules as live submissions. Invalid
+        event types, node IDs, duplicate keys, and events after completion are
+        rejected. The input log is never mutated or shared with the replayed run.
         """
         if not events:
             raise ValueError("Cannot replay an empty event log.")
 
-        first = events[0]
-        if first.event_type != EventType.WORKFLOW_STARTED:
+        first = deepcopy(events[0])
+        if (
+            not isinstance(first.event_type, EventType)
+            or first.event_type != EventType.WORKFLOW_STARTED
+        ):
             raise ValueError("Event log must start with a WORKFLOW_STARTED event.")
+        if first.node_id != definition.start_node.id:
+            raise InvalidEventError(
+                f"WORKFLOW_STARTED event must target start node '{definition.start_node.id}', "
+                f"got '{first.node_id}'."
+            )
+        if not isinstance(first.payload, dict):
+            raise ValueError("Event payload must be a dictionary.")
+        initial_context = first.payload.get("context", {})
+        if not isinstance(initial_context, dict):
+            raise ValueError("WORKFLOW_STARTED context must be a dictionary.")
 
-        ctx = dict(first.payload.get("context", {}))
+        ctx = deepcopy(initial_context)
         rid = run_id or uuid.uuid4().hex
 
         run = WorkflowRun(
@@ -175,14 +173,54 @@ class WorkflowEngine:
         self._advance(run)
 
         for event in events[1:]:
-            if run.status != RunStatus.RUNNING:
-                break
-            run.record_event(event)
-            if event.payload:
-                run.context.update(event.payload)
-            self._advance(run)
+            self._apply_event(run, event)
 
         return run
+
+    def _apply_event(self, run: WorkflowRun, event: Event) -> None:
+        """Validate and advance on a candidate before committing the event."""
+        if run.status != RunStatus.RUNNING:
+            raise WorkflowCompletedError(
+                f"Cannot submit events to a {run.status.value} workflow run."
+            )
+        if event.idempotency_key and run.has_seen_key(event.idempotency_key):
+            raise DuplicateEventError(
+                f"Event with idempotency key '{event.idempotency_key}' has already been processed."
+            )
+
+        current_node = run.definition.nodes[run.current_node_id]
+        expected = NODE_EVENT_MAP.get(current_node.type)
+        if not isinstance(event.event_type, EventType) or event.event_type != expected:
+            raise InvalidEventError(
+                f"Node '{current_node.id}' (type={current_node.type.value}) "
+                f"expects event '{expected.value if expected else 'N/A'}', "
+                f"got '{event.event_type}'."
+            )
+        if event.node_id != current_node.id:
+            raise InvalidEventError(
+                f"Event must target current node '{current_node.id}', got '{event.node_id}'."
+            )
+        if not isinstance(event.payload, dict):
+            raise ValueError("Event payload must be a dictionary.")
+
+        event = deepcopy(event)
+        candidate = replace(
+            run,
+            context=deepcopy(run.context),
+            events=run.events.copy(),
+            _seen_keys=run._seen_keys.copy(),
+        )
+        candidate.record_event(event)
+        # Context and history have separate snapshots, including nested values.
+        candidate.context.update(deepcopy(event.payload))
+        self._advance(candidate)
+
+        # Keep the public run and its context/log containers stable for callers.
+        run.context.clear()
+        run.context.update(candidate.context)
+        run.current_node_id = candidate.current_node_id
+        run.status = candidate.status
+        run.record_event(event)
 
     def _advance(self, run: WorkflowRun) -> None:
         """Advance the run through transitions until an actionable node is reached.

@@ -5,13 +5,16 @@ A reusable workflow engine that executes workflows defined in JSON, with determi
 ## Installation
 
 ```bash
-pip install workflow-engine
+git clone https://github.com/Maxencejules/workflow-engine.git
+cd workflow-engine
+python -m pip install .
 ```
 
-For development:
+Install from this checkout; a PyPI release is not assumed. Use a virtual environment
+to keep dependencies separate. For development, from the same directory:
 
 ```bash
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 ```
 
 ## Quick Start
@@ -90,6 +93,33 @@ assert replayed.status == run.status
 assert replayed.context == run.context
 ```
 
+### 4. Save and reload in separate processes
+
+The standard-library example stores the original workflow definition, run ID and
+events in a plain JSON file, then rebuilds the run in a new Python process:
+
+```bash
+python scripts/replay_json.py save work/expense-run.json
+python scripts/replay_json.py replay work/expense-run.json
+```
+
+Both commands print the same reconstructed state, including event timestamps and
+idempotency keys. The sample takes the high-value branch, then changes the amount,
+so replay must preserve the earlier routing decision.
+
+This example's payloads and context use JSON objects with string keys, arrays,
+strings, integers, finite floats, booleans and `null`, including nested values.
+Convert Python-specific values such as `datetime`, `Decimal`, tuples and sets to
+those types before saving; non-finite floats are rejected. Event timestamps are
+stored as ISO 8601 strings and restored separately from payloads.
+
+The file's `format_version` is `1`. Replay uses the exact definition snapshot
+saved in that file, including its workflow version. Keep historical definitions
+unchanged and assign a new workflow version when nodes, conditions or transition
+order change. A matching version string alone does not prove definitions are
+identical. This is a storage example for the current engine; log/definition
+migrations between incompatible engine versions are not provided.
+
 ## API Reference
 
 ### `parse_workflow(data: dict) -> WorkflowDefinition`
@@ -113,9 +143,23 @@ Submit an event to advance the workflow. The `event_type` must match the current
 - `approval` nodes expect `EventType.APPROVAL_SUBMITTED`
 - `decision` nodes expect `EventType.DECISION_MADE`
 
+Payloads are copied, including nested values, so later changes to caller-owned data
+or the live context do not alter recorded events. If validation or a transition
+fails, the run, event log, and idempotency keys are unchanged; the same key can be
+used for a corrected submission.
+
 #### `engine.replay(definition, events, run_id=None) -> WorkflowRun`
 
 Deterministically replay a workflow from its event log. Given the same definition and events, always produces the same final state.
+
+Replay validates event types, target nodes, and duplicate idempotency keys using
+the same rules as live submissions. It rejects events after completion and creates
+independent copies of the input log and context. A valid partial log can be replayed
+and continued with `submit_event()`.
+
+Event payload dictionaries remain accessible to callers; treat recorded logs and
+workflow definitions as read-only when relying on deterministic replay. Logs
+already altered by earlier versions cannot be reconstructed automatically.
 
 ### Node Types
 
