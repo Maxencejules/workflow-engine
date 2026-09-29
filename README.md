@@ -5,13 +5,16 @@ A reusable workflow engine that executes workflows defined in JSON, with determi
 ## Installation
 
 ```bash
-pip install workflow-engine
+git clone https://github.com/Maxencejules/workflow-engine.git
+cd workflow-engine
+python -m pip install .
 ```
 
-For development:
+Install from this checkout; a PyPI release is not assumed. Use a virtual environment
+to keep dependencies separate. For development, from the same directory:
 
 ```bash
-pip install -e ".[dev]"
+python -m pip install -e ".[dev]"
 ```
 
 ## Quick Start
@@ -89,6 +92,33 @@ assert replayed.current_node_id == run.current_node_id
 assert replayed.status == run.status
 assert replayed.context == run.context
 ```
+
+### 4. Save and reload in separate processes
+
+The standard-library example stores the original workflow definition, run ID and
+events in a plain JSON file, then rebuilds the run in a new Python process:
+
+```bash
+python scripts/replay_json.py save work/expense-run.json
+python scripts/replay_json.py replay work/expense-run.json
+```
+
+Both commands print the same reconstructed state, including event timestamps and
+idempotency keys. The sample takes the high-value branch, then changes the amount,
+so replay must preserve the earlier routing decision.
+
+This example's payloads and context use JSON objects with string keys, arrays,
+strings, integers, finite floats, booleans and `null`, including nested values.
+Convert Python-specific values such as `datetime`, `Decimal`, tuples and sets to
+those types before saving; non-finite floats are rejected. Event timestamps are
+stored as ISO 8601 strings and restored separately from payloads.
+
+The file's `format_version` is `1`. Replay uses the exact definition snapshot
+saved in that file, including its workflow version. Keep historical definitions
+unchanged and assign a new workflow version when nodes, conditions or transition
+order change. A matching version string alone does not prove definitions are
+identical. This is a storage example for the current engine; log/definition
+migrations between incompatible engine versions are not provided.
 
 ## API Reference
 
